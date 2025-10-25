@@ -1,62 +1,86 @@
+import streamlit as st
 import cv2
 import numpy as np
-import streamlit as st
-import math
 
-st.set_page_config(page_title="Rock Diameter Measurement", layout="wide")
-st.title("🪨 Rock Diameter Measurement App (con D80)")
+st.set_page_config(page_title="Medidor de Diámetro de Rocas", layout="wide")
 
-uploaded = st.file_uploader("📸 Sube una foto del cúmulo de rocas (con una regla visible)", type=["jpg", "jpeg", "png"])
+st.title("🪨 Medidor de Diámetro Promedio y D80 de Rocas")
+st.write(
+    """
+    Carga una foto del cúmulo de rocas con una **regla visible para calibración**.
+    Luego marca el extremo de la regla para definir la escala y obtén:
+    - Diámetro promedio
+    - D80 (el diámetro menor que el 80% de las rocas)
+    """
+)
 
-if uploaded:
-    file_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
+uploaded_file = st.file_uploader("📸 Cargar imagen", type=["jpg", "jpeg", "png"])
+
+if uploaded_file is not None:
+    # Leer la imagen de forma segura
+    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
     image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-    st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), caption="Imagen original", use_container_width=True)
 
-    st.markdown("### ⚙️ Calibración")
-    st.write("1️⃣ Mide en píxeles la distancia entre los extremos de la regla (puedes usar un programa de medición o contar en la imagen).")
-    pixel_dist = st.number_input("Distancia medida en la imagen (px)", min_value=1.0)
-    real_mm = st.number_input("Longitud real de esa distancia (mm)", min_value=1.0, value=100.0)
+    if image is None:
+        st.error("⚠️ No se pudo leer la imagen. Intenta subir un archivo .jpg o .png válido.")
+    else:
+        st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), caption="Imagen original", use_container_width=True)
 
-    if st.button("🔍 Detectar rocas"):
-        if pixel_dist > 0:
-            px_per_mm = pixel_dist / real_mm
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            blur = cv2.bilateralFilter(gray, 9, 75, 75)
-            _, th = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            if np.mean(blur[th==255]) < np.mean(blur[th==0]):
-                th = cv2.bitwise_not(th)
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
-            opening = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel, iterations=2)
+        # Calibración de escala
+        st.subheader("📏 Calibración de escala")
+        scale_length_mm = st.number_input(
+            "Longitud de la regla visible (en mm):", min_value=1.0, value=100.0, step=1.0
+        )
+        scale_px = st.number_input(
+            "Longitud de la regla en píxeles (aproximadamente, según la imagen):",
+            min_value=1.0,
+            value=100.0,
+            step=1.0,
+        )
+        scale_factor = scale_length_mm / scale_px  # mm/px
 
-            cnts, _ = cv2.findContours(opening, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            diameters_mm = []
-            for c in cnts:
-                area = cv2.contourArea(c)
-                if area < 50:
-                    continue
-                equi_diam = 2.0 * math.sqrt(area / math.pi)
-                diameters_mm.append(equi_diam / px_per_mm)
-                (x, y), radius = cv2.minEnclosingCircle(c)
-                cv2.circle(image, (int(x), int(y)), int(radius), (0,0,255), 2)
+        # Procesamiento de imagen
+        st.subheader("⚙️ Procesamiento de imagen")
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blur, 50, 150)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-            if diameters_mm:
-                diameters_mm.sort()
-                n = len(diameters_mm)
-                avg = np.mean(diameters_mm)
-                med = np.median(diameters_mm)
-                D80 = np.percentile(diameters_mm, 80)
+        diameters_mm = []
+        for contour in contours:
+            (x, y), radius = cv2.minEnclosingCircle(contour)
+            diameter_px = radius * 2
+            diameter_mm = diameter_px * scale_factor
+            if diameter_mm > 1:
+                diameters_mm.append(diameter_mm)
 
-                st.success(f"Rocas detectadas: {n}")
-                st.info(f"Promedio: {avg:.2f} mm | Mediana: {med:.2f} mm | **D80: {D80:.2f} mm**")
-                st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), caption="Rocas detectadas", use_container_width=True)
+        if diameters_mm:
+            diameters_mm = np.array(diameters_mm)
+            mean_diameter = np.mean(diameters_mm)
+            d80 = np.percentile(diameters_mm, 80)
 
-                csv_data = "index,diameter_mm\n" + "\n".join([f"{i+1},{d:.3f}" for i, d in enumerate(diameters_mm)])
-                st.download_button(
-                    label="📥 Descargar datos (CSV)",
-                    data=csv_data,
-                    file_name="rock_diameters.csv",
-                    mime="text/csv"
-                )
-            else:
-                st.warning("No se detectaron rocas. Verifica iluminación o calibración.")
+            st.success(f"**Diámetro promedio:** {mean_diameter:.2f} mm")
+            st.success(f"**D80 (diámetro del 80% de las rocas):** {d80:.2f} mm")
+
+            # Visualización de detecciones
+            output_img = image.copy()
+            for contour in contours:
+                (x, y), radius = cv2.minEnclosingCircle(contour)
+                cv2.circle(output_img, (int(x), int(y)), int(radius), (0, 255, 0), 2)
+
+            st.image(cv2.cvtColor(output_img, cv2.COLOR_BGR2RGB), caption="Detección de rocas", use_container_width=True)
+
+            # Generar CSV descargable
+            csv_data = "index,diameter_mm\n" + "\n".join(
+                [f"{i+1},{d:.3f}" for i, d in enumerate(diameters_mm)]
+            )
+            st.download_button(
+                label="📥 Descargar resultados (CSV)",
+                data=csv_data,
+                file_name="diametros_rocas.csv",
+                mime="text/csv",
+            )
+        else:
+            st.warning("No se detectaron contornos válidos. Ajusta la calidad de la imagen o el enfoque.")
+else:
+    st.info("Por favor, carga una imagen para comenzar.")
