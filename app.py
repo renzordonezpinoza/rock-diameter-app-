@@ -51,7 +51,7 @@ if uploaded:
                 st.info(f"Promedio: {avg:.2f} mm | Mediana: {med:.2f} mm | **D80: {D80:.2f} mm**")
                 st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), caption="Rocas detectadas", use_container_width=True)
 
-                csv_data = "index,diameter_mm\\n" + "\\n".join([f\"{i+1},{d:.3f}\" for i, d in enumerate(diameters_mm)])
+                csv_data = "index,diameter_mm\n" + "\n".join([f"{i+1},{d:.3f}" for i, d in enumerate(diameters_mm)])
                 st.download_button(
                     label="📥 Descargar datos (CSV)",
                     data=csv_data,
